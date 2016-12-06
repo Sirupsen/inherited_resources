@@ -42,13 +42,18 @@ module InheritedResources
                                   :class_name, :route_prefix, :route_collection_name,
                                   :route_instance_name, :singleton, :finder)
 
-        self.resource_class = options.delete(:resource_class)         if options.key?(:resource_class)
-        self.resource_class = options.delete(:class_name).constantize if options.key?(:class_name)
+        self.resource_class = options[:resource_class] if options.key?(:resource_class)
+        self.resource_class = options[:class_name].constantize if options.key?(:class_name)
 
         acts_as_singleton! if options.delete(:singleton)
 
         config = self.resources_configuration[:self]
         config[:route_prefix] = options.delete(:route_prefix) if options.key?(:route_prefix)
+
+        if options.key?(:resource_class) or options.key?(:class_name)
+          config[:request_name] = self.resource_class.to_s.underscore.gsub('/', '_')
+          options.delete(:resource_class) and options.delete(:class_name)
+        end
 
         options.each do |key, value|
           config[key] = value.to_sym
@@ -250,7 +255,21 @@ module InheritedResources
       #
       def initialize_resources_class_accessors! #:nodoc:
         # Initialize resource class
+
+        # First priority is the namespaced modek, e.g. User::Group
         self.resource_class = begin
+          namespaced_class = self.name.sub(/Controller/, '').singularize
+          namespaced_class.constantize
+        rescue NameError; nil end
+
+        # Second priority the camelcased c, i.e. UserGroup
+        self.resource_class ||= begin
+          camelcased_class = self.name.sub(/Controller/, '').gsub('::', '').singularize
+          camelcased_class.constantize
+        rescue NameError; nil end
+
+        # Otherwise use the Group class, or fail
+        self.resource_class ||= begin
           class_name = self.controller_name.classify
           class_name.constantize
         rescue NameError => e
@@ -270,6 +289,12 @@ module InheritedResources
         # Deal with namespaced controllers
         namespaces = self.controller_path.split('/')[0..-2]
         config[:route_prefix] = namespaces.join('_') unless namespaces.empty?
+
+        # Deal with default request parameters in namespaced controllers, e.g.
+        # Forum::Thread#create will properly pick up the request parameter
+        # which will be forum_thread, and not thread
+        # Additionally make this work orthogonally with instance_name
+        config[:request_name] = self.name.sub(/Controller$/, '').underscore.gsub('/', '_').singularize
 
         # Initialize polymorphic, singleton, scopes and belongs_to parameters
         self.parents_symbols ||= []
